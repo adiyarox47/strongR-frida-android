@@ -5,7 +5,6 @@ on:
     - cron: "0 9/12 * * *"
   workflow_dispatch:
 
-# Needed so GITHUB_TOKEN can create releases and upload assets
 permissions:
   contents: write
 
@@ -23,7 +22,12 @@ jobs:
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           script: |
-            core.setOutput('FRIDA_VERSION', '17.19.0');
+            const releaseResponse = await github.rest.repos.getLatestRelease({
+              owner: 'frida',
+              repo: 'frida',
+            });
+            const { data: { tag_name: ver } } = releaseResponse;
+            core.setOutput('FRIDA_VERSION', ver);
 
       - name: Check release version
         id: checkReleaseVersion
@@ -34,8 +38,8 @@ jobs:
             try {
               const releaseVersion = '${{ steps.pullFridaLatestRelease.outputs.FRIDA_VERSION }}';
               const releaseResponse = await github.rest.repos.getReleaseByTag({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
+                owner: '${{ secrets.GIT_OWNER }}',
+                repo: '${{ secrets.GIT_REPO }}',
                 tag: releaseVersion
               });
               const { data: { tag_name: ver } } = releaseResponse;
@@ -58,17 +62,18 @@ jobs:
     if: needs.check_version.outputs.ALREADY_RELEASE == '0'
 
     steps:
-      # actions/create-release is archived and deprecated; use the gh CLI instead
+      # actions/create-release is archived/deprecated; use the gh CLI instead
       - name: Create Runner Release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           VERSION: ${{ needs.check_version.outputs.FRIDA_VERSION }}
+          TARGET_REPO: ${{ secrets.GIT_OWNER }}/${{ secrets.GIT_REPO }}
         run: |
           gh release create "$VERSION" \
-            --repo "$GITHUB_REPOSITORY" \
+            --repo "$TARGET_REPO" \
             --title "$VERSION" \
             --notes "strongR-frida build for Frida $VERSION" \
-            --target "$GITHUB_SHA"
+            --prerelease=false
 
   android_build:
     runs-on: ubuntu-22.04
@@ -80,6 +85,10 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 18
+
+      - uses: fusion-engineering/setup-git-credentials@v2
+        with:
+          credentials: ${{ secrets.GIT_CREDENTIALS }}
 
       - name: set up JDK 17
         uses: actions/setup-java@v4
@@ -109,20 +118,20 @@ jobs:
         env:
           VERSION: ${{ needs.check_version.outputs.FRIDA_VERSION }}
         run: |
-          git config --global user.name "GitHub Actions"
-          git config --global user.email "actions@github.com"
-          git clone https://github.com/hzzheyang/Patchs.git Patchs
+          git config --global user.name "${{ secrets.GIT_NAME }}"
+          git config --global user.email "${{ secrets.GIT_EMAIL }}"
+          git clone ${{ secrets.PATCH_REPO }}
           export ANDROID_NDK_ROOT=${{ steps.setup-ndk.outputs.ndk-path }}
           git clone --recurse-submodules https://github.com/frida/frida
           cd frida
-          git checkout tags/$VERSION
-          cd frida
+          git checkout "tags/$VERSION"
+          git submodule update --init --recursive
           for path in ../Patchs/strongR-frida/*
           do
-            name=$(basename $path)
-            real=$(realpath $path)
+            name=$(basename "$path")
+            real=$(realpath "$path")
             echo "Apply patches in $real to frida/subprojects/$name"
-            cd subprojects/$name
+            cd "subprojects/$name"
             git am ../../../Patchs/strongR-frida/$name/*.patch
             cd ../..
           done
@@ -138,21 +147,63 @@ jobs:
             cd ..
           done
 
+      - name: Check release version
+        id: checkReleaseVersion
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            try {
+              const releaseVersion = '${{ needs.check_version.outputs.FRIDA_VERSION }}';
+              const releaseResponse = await github.rest.repos.getReleaseByTag({
+                owner: '${{ secrets.GIT_OWNER }}',
+                repo: '${{ secrets.GIT_REPO }}',
+                tag: releaseVersion
+              });
+              const { data: { id: releaseId, html_url: htmlUrl, upload_url: uploadUrl } } = releaseResponse;
+              core.setOutput('id', releaseId);
+              core.setOutput('html_url', htmlUrl);
+              core.setOutput('upload_url', uploadUrl);
+              core.setOutput('version', releaseVersion);
+            } catch (e) {
+              core.setFailed(e.message);
+            }
+
+      - name: package build result for Android
+        shell: bash
+        run: |
+          gzip build-android-arm/subprojects/frida-core/server/frida-server
+          gzip build-android-arm64/subprojects/frida-core/server/frida-server
+          gzip build-android-x86/subprojects/frida-core/server/frida-server
+          gzip build-android-x86_64/subprojects/frida-core/server/frida-server
+
+          gzip build-android-arm/subprojects/frida-core/inject/frida-inject
+          gzip build-android-arm64/subprojects/frida-core/inject/frida-inject
+          gzip build-android-x86/subprojects/frida-core/inject/frida-inject
+          gzip build-android-x86_64/subprojects/frida-core/inject/frida-inject
+
+          gzip build-android-arm/subprojects/frida-core/lib/gadget/frida-gadget.so
+          gzip build-android-arm64/subprojects/frida-core/lib/gadget/frida-gadget.so
+          gzip build-android-x86/subprojects/frida-core/lib/gadget/frida-gadget.so
+          gzip build-android-x86_64/subprojects/frida-core/lib/gadget/frida-gadget.so
+
       # Replaces the 12 separate actions/upload-release-asset steps
-      # (that action is archived/deprecated and had typos in two of the steps)
-      - name: Package and upload release assets
+      # (that action is archived/deprecated, and the arm/x86_64 inject
+      # asset name had a typo: "android-arm-x86_64" instead of "android-x86_64")
+      - name: Upload release assets
         shell: bash
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           VERSION: ${{ needs.check_version.outputs.FRIDA_VERSION }}
+          TARGET_REPO: ${{ secrets.GIT_OWNER }}/${{ secrets.GIT_REPO }}
         run: |
           mkdir -p dist
           for ARCH in arm arm64 x86 x86_64
           do
             CORE="build-android-$ARCH/subprojects/frida-core"
-            gzip -c "$CORE/server/frida-server"       > "dist/hluda-server-$VERSION-android-$ARCH.gz"
-            gzip -c "$CORE/inject/frida-inject"       > "dist/hluda-inject-$VERSION-android-$ARCH.gz"
-            gzip -c "$CORE/lib/gadget/frida-gadget.so" > "dist/hluda-gadget-$VERSION-android-$ARCH.so.gz"
+            cp "$CORE/server/frida-server.gz"        "dist/hluda-server-$VERSION-android-$ARCH.gz"
+            cp "$CORE/inject/frida-inject.gz"        "dist/hluda-inject-$VERSION-android-$ARCH.gz"
+            cp "$CORE/lib/gadget/frida-gadget.so.gz" "dist/hluda-gadget-$VERSION-android-$ARCH.so.gz"
           done
           ls -la dist
-          gh release upload "$VERSION" dist/* --clobber --repo "$GITHUB_REPOSITORY"
+          gh release upload "$VERSION" dist/* --clobber --repo "$TARGET_REPO"
