@@ -122,7 +122,12 @@ jobs:
             real=$(realpath "$path")
             echo "Apply patches in $real to frida/subprojects/$name"
             cd "subprojects/$name"
-            git am ../../../Patchs/strongR-frida/$name/*.patch
+            if ! git am --3way ../../../Patchs/strongR-frida/"$name"/*.patch; then
+              echo "::error::Failed to apply patches for subprojects/$name (see log above for the failing patch/file)"
+              git am --abort
+              cd ../..
+              exit 1
+            fi
             cd ../..
           done
           cd ..
