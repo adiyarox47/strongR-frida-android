@@ -38,8 +38,8 @@ jobs:
             try {
               const releaseVersion = '${{ steps.pullFridaLatestRelease.outputs.FRIDA_VERSION }}';
               const releaseResponse = await github.rest.repos.getReleaseByTag({
-                owner: '${{ secrets.GIT_OWNER }}',
-                repo: '${{ secrets.GIT_REPO }}',
+                owner: context.repo.owner,
+                repo: context.repo.repo,
                 tag: releaseVersion
               });
               const { data: { tag_name: ver } } = releaseResponse;
@@ -67,10 +67,9 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           VERSION: ${{ needs.check_version.outputs.FRIDA_VERSION }}
-          TARGET_REPO: ${{ secrets.GIT_OWNER }}/${{ secrets.GIT_REPO }}
         run: |
           gh release create "$VERSION" \
-            --repo "$TARGET_REPO" \
+            --repo "$GITHUB_REPOSITORY" \
             --title "$VERSION" \
             --notes "strongR-frida build for Frida $VERSION" \
             --prerelease=false
@@ -156,8 +155,8 @@ jobs:
             try {
               const releaseVersion = '${{ needs.check_version.outputs.FRIDA_VERSION }}';
               const releaseResponse = await github.rest.repos.getReleaseByTag({
-                owner: '${{ secrets.GIT_OWNER }}',
-                repo: '${{ secrets.GIT_REPO }}',
+                owner: context.repo.owner,
+                repo: context.repo.repo,
                 tag: releaseVersion
               });
               const { data: { id: releaseId, html_url: htmlUrl, upload_url: uploadUrl } } = releaseResponse;
@@ -195,7 +194,6 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           VERSION: ${{ needs.check_version.outputs.FRIDA_VERSION }}
-          TARGET_REPO: ${{ secrets.GIT_OWNER }}/${{ secrets.GIT_REPO }}
         run: |
           mkdir -p dist
           for ARCH in arm arm64 x86 x86_64
@@ -206,4 +204,4 @@ jobs:
             cp "$CORE/lib/gadget/frida-gadget.so.gz" "dist/hluda-gadget-$VERSION-android-$ARCH.so.gz"
           done
           ls -la dist
-          gh release upload "$VERSION" dist/* --clobber --repo "$TARGET_REPO"
+          gh release upload "$VERSION" dist/* --clobber --repo "$GITHUB_REPOSITORY"
