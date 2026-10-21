@@ -22,12 +22,7 @@ jobs:
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           script: |
-            const releaseResponse = await github.rest.repos.getLatestRelease({
-              owner: 'frida',
-              repo: 'frida',
-            });
-            const { data: { tag_name: ver } } = releaseResponse;
-            core.setOutput('FRIDA_VERSION', ver);
+            core.setOutput('FRIDA_VERSION', '17.19.0');
 
       - name: Check release version
         id: checkReleaseVersion
@@ -85,10 +80,6 @@ jobs:
         with:
           node-version: 18
 
-      - uses: fusion-engineering/setup-git-credentials@v2
-        with:
-          credentials: ${{ secrets.GIT_CREDENTIALS }}
-
       - name: set up JDK 17
         uses: actions/setup-java@v4
         with:
@@ -117,9 +108,9 @@ jobs:
         env:
           VERSION: ${{ needs.check_version.outputs.FRIDA_VERSION }}
         run: |
-          git config --global user.name "${{ secrets.GIT_NAME }}"
-          git config --global user.email "${{ secrets.GIT_EMAIL }}"
-          git clone ${{ secrets.PATCH_REPO }}
+          git config --global user.name "GitHub Actions"
+          git config --global user.email "actions@github.com"
+          git clone https://github.com/hzzheyang/Patchs.git Patchs
           export ANDROID_NDK_ROOT=${{ steps.setup-ndk.outputs.ndk-path }}
           git clone --recurse-submodules https://github.com/frida/frida
           cd frida
